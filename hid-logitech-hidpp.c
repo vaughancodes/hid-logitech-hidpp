@@ -2431,6 +2431,7 @@ struct hidpp_ff_private_data {
 	u16 spring_level;
 	u16 damper_level;
 	u16 friction_level;
+	struct hid_device *sysfs_hid;
 };
 
 struct hidpp_ff_work_data {
@@ -2858,21 +2859,33 @@ static ssize_t hidpp_ff_##_name##_show(struct device *dev,			\
 		struct device_attribute *attr, char *buf)			\
 {										\
 	struct hid_device *hid = to_hid_device(dev);				\
-	struct hidpp_device *hidpp = hid_get_drvdata(hid);			\
-	struct hidpp_ff_private_data *data = hidpp->ff_data;			\
-	if (!data)								\
+	struct hid_input *hidinput;						\
+	struct input_dev *idev;							\
+	struct hidpp_ff_private_data *data;					\
+	if (list_empty(&hid->inputs))						\
 		return -ENODEV;							\
+	hidinput = list_entry(hid->inputs.next, struct hid_input, list);	\
+	idev = hidinput->input;							\
+	if (!idev || !idev->ff || !idev->ff->private)				\
+		return -ENODEV;							\
+	data = idev->ff->private;						\
 	return scnprintf(buf, PAGE_SIZE, "%u\n", data->_field);			\
 }										\
 static ssize_t hidpp_ff_##_name##_store(struct device *dev,			\
 		struct device_attribute *attr, const char *buf, size_t count)	\
 {										\
 	struct hid_device *hid = to_hid_device(dev);				\
-	struct hidpp_device *hidpp = hid_get_drvdata(hid);			\
-	struct hidpp_ff_private_data *data = hidpp->ff_data;			\
+	struct hid_input *hidinput;						\
+	struct input_dev *idev;							\
+	struct hidpp_ff_private_data *data;					\
 	unsigned int val;							\
-	if (!data)								\
+	if (list_empty(&hid->inputs))						\
 		return -ENODEV;							\
+	hidinput = list_entry(hid->inputs.next, struct hid_input, list);	\
+	idev = hidinput->input;							\
+	if (!idev || !idev->ff || !idev->ff->private)				\
+		return -ENODEV;							\
+	data = idev->ff->private;						\
 	if (kstrtouint(buf, 10, &val))						\
 		return -EINVAL;							\
 	data->_field = clamp_val(val, 0, 100);					\
@@ -2888,7 +2901,7 @@ HIDPP_FF_LEVEL_ATTR(friction_level, friction_level);
 static void hidpp_ff_destroy(struct ff_device *ff)
 {
 	struct hidpp_ff_private_data *data = ff->private;
-	struct hid_device *hid = data->hidpp->hid_dev;
+	struct hid_device *hid = data->sysfs_hid;
 
 	hid_info(hid, "Unloading HID++ force feedback.\n");
 
@@ -2996,19 +3009,20 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 	data->damper_level = 100;
 	data->friction_level = 100;
 
-	/* Create sysfs interface */
-	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_range);
+	/* Create sysfs interface on the HID device that owns the input */
+	data->sysfs_hid = hid;
+	error = device_create_file(&(hid->dev), &dev_attr_range);
 	if (error)
-		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"range\", errno %d!\n", error);
-	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_spring_level);
+		hid_warn(hid, "Unable to create sysfs interface for \"range\", errno %d!\n", error);
+	error = device_create_file(&(hid->dev), &dev_attr_spring_level);
 	if (error)
-		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"spring_level\", errno %d!\n", error);
-	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_damper_level);
+		hid_warn(hid, "Unable to create sysfs interface for \"spring_level\", errno %d!\n", error);
+	error = device_create_file(&(hid->dev), &dev_attr_damper_level);
 	if (error)
-		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"damper_level\", errno %d!\n", error);
-	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_friction_level);
+		hid_warn(hid, "Unable to create sysfs interface for \"damper_level\", errno %d!\n", error);
+	error = device_create_file(&(hid->dev), &dev_attr_friction_level);
 	if (error)
-		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"friction_level\", errno %d!\n", error);
+		hid_warn(hid, "Unable to create sysfs interface for \"friction_level\", errno %d!\n", error);
 
 	/* init the hardware command queue */
 	atomic_set(&data->workqueue_size, 0);
