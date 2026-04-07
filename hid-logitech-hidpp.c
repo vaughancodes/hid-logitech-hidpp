@@ -2426,6 +2426,9 @@ struct hidpp_ff_private_data {
 	int *effect_ids;
 	struct workqueue_struct *wq;
 	atomic_t workqueue_size;
+	u8 spring_level;
+	u8 damper_level;
+	u8 friction_level;
 };
 
 struct hidpp_ff_work_data {
@@ -2693,19 +2696,42 @@ static int hidpp_ff_upload_effect(struct input_dev *dev, struct ff_effect *effec
 	case FF_INERTIA:
 	case FF_SPRING:
 	case FF_DAMPER:
+	{
+		u8 level = 255;
+		s16 left_sat, right_sat, left_coeff, right_coeff;
+
+		switch (effect->type) {
+		case FF_SPRING:
+			level = data->spring_level;
+			break;
+		case FF_DAMPER:
+			level = data->damper_level;
+			break;
+		case FF_FRICTION:
+			level = data->friction_level;
+			break;
+		default:
+			break;
+		}
+
+		left_sat = (effect->u.condition[0].left_saturation * level) / 255;
+		right_sat = (effect->u.condition[0].right_saturation * level) / 255;
+		left_coeff = (effect->u.condition[0].left_coeff * level) / 255;
+		right_coeff = (effect->u.condition[0].right_coeff * level) / 255;
+
 		params[1] = HIDPP_FF_CONDITION_CMDS[effect->type - FF_SPRING];
-		params[6] = effect->u.condition[0].left_saturation >> 9;
-		params[7] = (effect->u.condition[0].left_saturation >> 1) & 255;
-		params[8] = effect->u.condition[0].left_coeff >> 8;
-		params[9] = effect->u.condition[0].left_coeff & 255;
+		params[6] = left_sat >> 9;
+		params[7] = (left_sat >> 1) & 255;
+		params[8] = left_coeff >> 8;
+		params[9] = left_coeff & 255;
 		params[10] = effect->u.condition[0].deadband >> 9;
 		params[11] = (effect->u.condition[0].deadband >> 1) & 255;
 		params[12] = effect->u.condition[0].center >> 8;
 		params[13] = effect->u.condition[0].center & 255;
-		params[14] = effect->u.condition[0].right_coeff >> 8;
-		params[15] = effect->u.condition[0].right_coeff & 255;
-		params[16] = effect->u.condition[0].right_saturation >> 9;
-		params[17] = (effect->u.condition[0].right_saturation >> 1) & 255;
+		params[14] = right_coeff >> 8;
+		params[15] = right_coeff & 255;
+		params[16] = right_sat >> 9;
+		params[17] = (right_sat >> 1) & 255;
 		size = 18;
 		dbg_hid("Uploading %s force left coeff=%d, left sat=%d, right coeff=%d, right sat=%d\n",
 				HIDPP_FF_CONDITION_NAMES[effect->type - FF_SPRING],
@@ -2717,6 +2743,7 @@ static int hidpp_ff_upload_effect(struct input_dev *dev, struct ff_effect *effec
 				effect->u.condition[0].deadband,
 				effect->u.condition[0].center);
 		break;
+	}
 	default:
 		hid_err(data->hidpp->hid_dev, "Unexpected force type %i!\n", effect->type);
 		return -EINVAL;
@@ -2822,6 +2849,40 @@ static ssize_t hidpp_ff_range_store(struct device *dev, struct device_attribute 
 
 static DEVICE_ATTR(range, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH, hidpp_ff_range_show, hidpp_ff_range_store);
 
+/* Per-effect-type level sysfs attributes (0-255, default 255 = 100%) */
+
+#define HIDPP_FF_LEVEL_ATTR(_name, _field)					\
+static ssize_t hidpp_ff_##_name##_show(struct device *dev,			\
+		struct device_attribute *attr, char *buf)			\
+{										\
+	struct hid_device *hid = to_hid_device(dev);				\
+	struct hid_input *hidinput = list_entry(hid->inputs.next,		\
+			struct hid_input, list);				\
+	struct input_dev *idev = hidinput->input;				\
+	struct hidpp_ff_private_data *data = idev->ff->private;			\
+	return scnprintf(buf, PAGE_SIZE, "%u\n", data->_field);			\
+}										\
+static ssize_t hidpp_ff_##_name##_store(struct device *dev,			\
+		struct device_attribute *attr, const char *buf, size_t count)	\
+{										\
+	struct hid_device *hid = to_hid_device(dev);				\
+	struct hid_input *hidinput = list_entry(hid->inputs.next,		\
+			struct hid_input, list);				\
+	struct input_dev *idev = hidinput->input;				\
+	struct hidpp_ff_private_data *data = idev->ff->private;			\
+	unsigned int val;							\
+	if (kstrtouint(buf, 10, &val))						\
+		return -EINVAL;							\
+	data->_field = clamp_val(val, 0, 255);					\
+	return count;								\
+}										\
+static DEVICE_ATTR(_name, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH,	\
+		   hidpp_ff_##_name##_show, hidpp_ff_##_name##_store)
+
+HIDPP_FF_LEVEL_ATTR(spring_level, spring_level);
+HIDPP_FF_LEVEL_ATTR(damper_level, damper_level);
+HIDPP_FF_LEVEL_ATTR(friction_level, friction_level);
+
 static void hidpp_ff_destroy(struct ff_device *ff)
 {
 	struct hidpp_ff_private_data *data = ff->private;
@@ -2830,6 +2891,9 @@ static void hidpp_ff_destroy(struct ff_device *ff)
 	hid_info(hid, "Unloading HID++ force feedback.\n");
 
 	device_remove_file(&hid->dev, &dev_attr_range);
+	device_remove_file(&hid->dev, &dev_attr_spring_level);
+	device_remove_file(&hid->dev, &dev_attr_damper_level);
+	device_remove_file(&hid->dev, &dev_attr_friction_level);
 	destroy_workqueue(data->wq);
 	kfree(data->effect_ids);
 }
@@ -2923,10 +2987,24 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 	ff->set_autocenter = hidpp_ff_set_autocenter;
 	ff->destroy = hidpp_ff_destroy;
 
+	/* Initialize per-effect-type levels to full (255 = 100%) */
+	data->spring_level = 255;
+	data->damper_level = 255;
+	data->friction_level = 255;
+
 	/* Create sysfs interface */
 	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_range);
 	if (error)
 		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"range\", errno %d!\n", error);
+	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_spring_level);
+	if (error)
+		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"spring_level\", errno %d!\n", error);
+	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_damper_level);
+	if (error)
+		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"damper_level\", errno %d!\n", error);
+	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_friction_level);
+	if (error)
+		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"friction_level\", errno %d!\n", error);
 
 	/* init the hardware command queue */
 	atomic_set(&data->workqueue_size, 0);
