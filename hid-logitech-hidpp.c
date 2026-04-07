@@ -213,6 +213,8 @@ struct hidpp_device {
 	struct hidpp_scroll_counter vertical_wheel_counter;
 
 	u8 wireless_feature_index;
+
+	void *ff_data;
 };
 
 /* HID++ 1.0 error codes */
@@ -2856,21 +2858,21 @@ static ssize_t hidpp_ff_##_name##_show(struct device *dev,			\
 		struct device_attribute *attr, char *buf)			\
 {										\
 	struct hid_device *hid = to_hid_device(dev);				\
-	struct hid_input *hidinput = list_entry(hid->inputs.next,		\
-			struct hid_input, list);				\
-	struct input_dev *idev = hidinput->input;				\
-	struct hidpp_ff_private_data *data = idev->ff->private;			\
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);			\
+	struct hidpp_ff_private_data *data = hidpp->ff_data;			\
+	if (!data)								\
+		return -ENODEV;							\
 	return scnprintf(buf, PAGE_SIZE, "%u\n", data->_field);			\
 }										\
 static ssize_t hidpp_ff_##_name##_store(struct device *dev,			\
 		struct device_attribute *attr, const char *buf, size_t count)	\
 {										\
 	struct hid_device *hid = to_hid_device(dev);				\
-	struct hid_input *hidinput = list_entry(hid->inputs.next,		\
-			struct hid_input, list);				\
-	struct input_dev *idev = hidinput->input;				\
-	struct hidpp_ff_private_data *data = idev->ff->private;			\
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);			\
+	struct hidpp_ff_private_data *data = hidpp->ff_data;			\
 	unsigned int val;							\
+	if (!data)								\
+		return -ENODEV;							\
 	if (kstrtouint(buf, 10, &val))						\
 		return -EINVAL;							\
 	data->_field = clamp_val(val, 0, 255);					\
@@ -2890,6 +2892,7 @@ static void hidpp_ff_destroy(struct ff_device *ff)
 
 	hid_info(hid, "Unloading HID++ force feedback.\n");
 
+	data->hidpp->ff_data = NULL;
 	device_remove_file(&hid->dev, &dev_attr_range);
 	device_remove_file(&hid->dev, &dev_attr_spring_level);
 	device_remove_file(&hid->dev, &dev_attr_damper_level);
@@ -2973,6 +2976,7 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 	}
 
 	data->hidpp = hidpp;
+	hidpp->ff_data = data;
 	data->version = version;
 	for (j = 0; j < num_slots; j++)
 		data->effect_ids[j] = -1;
