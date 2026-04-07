@@ -2428,9 +2428,9 @@ struct hidpp_ff_private_data {
 	int *effect_ids;
 	struct workqueue_struct *wq;
 	atomic_t workqueue_size;
-	u8 spring_level;
-	u8 damper_level;
-	u8 friction_level;
+	u16 spring_level;
+	u16 damper_level;
+	u16 friction_level;
 };
 
 struct hidpp_ff_work_data {
@@ -2699,7 +2699,7 @@ static int hidpp_ff_upload_effect(struct input_dev *dev, struct ff_effect *effec
 	case FF_SPRING:
 	case FF_DAMPER:
 	{
-		u8 level = 255;
+		u16 level = 100;
 		s16 left_sat, right_sat, left_coeff, right_coeff;
 
 		switch (effect->type) {
@@ -2716,10 +2716,10 @@ static int hidpp_ff_upload_effect(struct input_dev *dev, struct ff_effect *effec
 			break;
 		}
 
-		left_sat = (effect->u.condition[0].left_saturation * level) / 255;
-		right_sat = (effect->u.condition[0].right_saturation * level) / 255;
-		left_coeff = (effect->u.condition[0].left_coeff * level) / 255;
-		right_coeff = (effect->u.condition[0].right_coeff * level) / 255;
+		left_sat = (effect->u.condition[0].left_saturation * level) / 100;
+		right_sat = (effect->u.condition[0].right_saturation * level) / 100;
+		left_coeff = (effect->u.condition[0].left_coeff * level) / 100;
+		right_coeff = (effect->u.condition[0].right_coeff * level) / 100;
 
 		params[1] = HIDPP_FF_CONDITION_CMDS[effect->type - FF_SPRING];
 		params[6] = left_sat >> 9;
@@ -2875,7 +2875,7 @@ static ssize_t hidpp_ff_##_name##_store(struct device *dev,			\
 		return -ENODEV;							\
 	if (kstrtouint(buf, 10, &val))						\
 		return -EINVAL;							\
-	data->_field = clamp_val(val, 0, 255);					\
+	data->_field = clamp_val(val, 0, 100);					\
 	return count;								\
 }										\
 static DEVICE_ATTR(_name, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH,	\
@@ -2991,10 +2991,10 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 	ff->set_autocenter = hidpp_ff_set_autocenter;
 	ff->destroy = hidpp_ff_destroy;
 
-	/* Initialize per-effect-type levels to full (255 = 100%) */
-	data->spring_level = 255;
-	data->damper_level = 255;
-	data->friction_level = 255;
+	/* Initialize per-effect-type levels to full (100 = 100%) */
+	data->spring_level = 100;
+	data->damper_level = 100;
+	data->friction_level = 100;
 
 	/* Create sysfs interface */
 	error = device_create_file(&(hidpp->hid_dev->dev), &dev_attr_range);
